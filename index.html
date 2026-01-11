@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Video Downloader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    
+    <style>
+        /* Simple spinner animation */
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            display: none;
+            margin: 10px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .status-text {
+            font-size: 12px;
+            color: #666;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 min-h-screen flex items-center justify-center font-sans">
+
+    <div class="bg-white p-8 rounded-xl shadow-2xl max-w-md w-full text-center">
+        <h1 class="text-3xl font-bold mb-2 text-slate-800">Media Saver</h1>
+        <p class="text-slate-500 mb-6 text-sm">Download from YouTube, Instagram, Facebook, TikTok</p>
+
+        <div class="mb-4 relative">
+            <input type="text" id="videoUrl" placeholder="Paste video link here..." 
+                class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-gray-700"
+                onkeypress="handleEnter(event)">
+        </div>
+
+        <!-- Download Type Selection -->
+        <div class="mb-4 flex gap-2 justify-center">
+            <label class="flex items-center gap-2 px-4 py-2 bg-slate-100 rounded-lg cursor-pointer hover:bg-slate-200 transition">
+                <input type="radio" name="downloadType" value="video" checked class="accent-blue-600">
+                <span class="text-slate-700 font-medium">🎬 Video</span>
+            </label>
+            <label class="flex items-center gap-2 px-4 py-2 bg-slate-100 rounded-lg cursor-pointer hover:bg-slate-200 transition">
+                <input type="radio" name="downloadType" value="audio" class="accent-blue-600">
+                <span class="text-slate-700 font-medium">🎵 Audio Only</span>
+            </label>
+        </div>
+
+        <button onclick="downloadVideo()" 
+            class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md active:transform active:scale-95">
+            Process Video
+        </button>
+
+        <div class="loader" id="loader"></div>
+        <p id="statusText" class="status-text hidden"></p>
+
+        <div id="result" class="mt-6 hidden fade-in">
+            <div class="p-4 bg-green-50 rounded-lg border border-green-200">
+                <p class="text-green-700 font-medium mb-3">Media Processed Successfully!</p>
+                <a id="downloadBtn" href="#" target="_blank" 
+                    class="block w-full bg-green-500 hover:bg-green-600 text-white font-bold py-2 rounded-lg transition shadow">
+                    Download Now
+                </a>
+                <p class="text-xs text-gray-400 mt-2">If media opens in new tab, right-click and "Save As"</p>
+            </div>
+        </div>
+        
+        <div id="errorMsg" class="mt-4 hidden p-3 bg-red-50 text-red-500 rounded border border-red-200 text-sm"></div>
+    </div>
+
+    <script>
+        // Trigger download on Enter key
+        function handleEnter(e) {
+            if (e.key === 'Enter') downloadVideo();
+        }
+
+        function setStatus(msg) {
+            const el = document.getElementById('statusText');
+            el.textContent = msg;
+            el.classList.remove('hidden');
+        }
+
+        function hideStatus() {
+            document.getElementById('statusText').classList.add('hidden');
+        }
+
+        // Use multiple API services for redundancy
+        const apiServices = [
+            {
+                name: 'SaveFrom Style API',
+                getUrl: async (url, audioOnly) => {
+                    // Use a CORS proxy with a video info API
+                    const proxyUrl = 'https://corsproxy.io/?';
+                    const apiUrl = `https://www.y2mate.com/mates/analyzeV2/ajax`;
+                    
+                    const formData = new FormData();
+                    formData.append('k_query', url);
+                    formData.append('k_page', 'home');
+                    formData.append('hl', 'en');
+                    formData.append('q_auto', '1');
+                    
+                    const response = await axios.post(proxyUrl + encodeURIComponent(apiUrl), formData, {
+                        timeout: 20000
+                    });
+                    
+                    if (response.data && response.data.links) {
+                        const links = response.data.links;
+                        if (audioOnly && links.mp3) {
+                            const mp3Keys = Object.keys(links.mp3);
+                            if (mp3Keys.length > 0) {
+                                return { needsConvert: true, data: links.mp3[mp3Keys[0]] };
+                            }
+                        }
+                        if (links.mp4) {
+                            const mp4Keys = Object.keys(links.mp4);
+                            if (mp4Keys.length > 0) {
+                                return { needsConvert: false, url: links.mp4[mp4Keys[0]].url };
+                            }
+                        }
+                    }
+                    throw new Error('No download links found');
+                }
+            },
+            {
+                name: 'AllTube API',
+                getUrl: async (url, audioOnly) => {
+                    const proxyUrl = 'https://corsproxy.io/?';
+                    const format = audioOnly ? 'bestaudio' : 'best';
+                    const apiUrl = `https://alltubedownload.net/api/json?url=${encodeURIComponent(url)}&format=${format}`;
+                    
+                    const response = await axios.get(proxyUrl + encodeURIComponent(apiUrl), {
+                        timeout: 20000
+                    });
+                    
+                    if (response.data && response.data.url) {
+                        return { url: response.data.url };
+                    }
+                    throw new Error('No URL in response');
+                }
+            },
+            {
+                name: 'Cobalt API',
+                getUrl: async (url, audioOnly) => {
+                    const instances = [
+                        'https://api.cobalt.tools',
+                        'https://cobalt.canine.tools',
+                        'https://api.cobalt-api.workers.dev'
+                    ];
+                    
+                    for (const instance of instances) {
+                        try {
+                            const response = await axios.post(`${instance}/api/json`, {
+                                url: url,
+                                vCodec: "h264",
+                                vQuality: "720",
+                                aFormat: "mp3",
+                                isAudioOnly: audioOnly
+                            }, {
+                                headers: {
+                                    'Accept': 'application/json',
+                                    'Content-Type': 'application/json'
+                                },
+                                timeout: 15000
+                            });
+                            
+                            if (response.data && response.data.url) {
+                                return { url: response.data.url };
+                            }
+                        } catch (e) {
+                            console.warn('Cobalt instance failed:', instance);
+                        }
+                    }
+                    throw new Error('All Cobalt instances failed');
+                }
+            }
+        ];
+
+        // Simple direct download approach using embed URLs
+        function getDirectUrls(inputUrl) {
+            const urls = [];
+            
+            // YouTube
+            if (inputUrl.includes('youtube.com') || inputUrl.includes('youtu.be')) {
+                let videoId = '';
+                if (inputUrl.includes('youtu.be/')) {
+                    videoId = inputUrl.split('youtu.be/')[1].split('?')[0];
+                } else if (inputUrl.includes('v=')) {
+                    videoId = inputUrl.split('v=')[1].split('&')[0];
+                }
+                if (videoId) {
+                    urls.push({
+                        type: 'redirect',
+                        url: `https://www.ssyoutube.com/watch?v=${videoId}`,
+                        name: 'SSYouTube'
+                    });
+                    urls.push({
+                        type: 'redirect', 
+                        url: `https://www.y2mate.com/youtube/${videoId}`,
+                        name: 'Y2Mate'
+                    });
+                }
+            }
+            
+            return urls;
+        }
+
+        async function downloadVideo() {
+            const urlInput = document.getElementById('videoUrl').value.trim();
+            const loader = document.getElementById('loader');
+            const resultDiv = document.getElementById('result');
+            const errorMsg = document.getElementById('errorMsg');
+            const downloadBtn = document.getElementById('downloadBtn');
+            
+            // Get selected download type
+            const downloadType = document.querySelector('input[name="downloadType"]:checked').value;
+            const isAudioOnly = downloadType === 'audio';
+
+            // Reset UI
+            resultDiv.classList.add('hidden');
+            errorMsg.classList.add('hidden');
+            hideStatus();
+            
+            if (!urlInput) {
+                showError("Please paste a valid URL first.");
+                return;
+            }
+
+            loader.style.display = 'block';
+
+            // Try direct redirect services first for YouTube
+            const directUrls = getDirectUrls(urlInput);
+            if (directUrls.length > 0) {
+                setStatus(`Opening ${directUrls[0].name} for download...`);
+                loader.style.display = 'none';
+                resultDiv.classList.remove('hidden');
+                downloadBtn.href = directUrls[0].url;
+                downloadBtn.textContent = isAudioOnly ? '🎵 Open Audio Downloader' : '🎬 Open Video Downloader';
+                hideStatus();
+                return;
+            }
+
+            // For other platforms, try API services
+            for (const service of apiServices) {
+                try {
+                    setStatus(`Trying ${service.name}...`);
+                    const result = await service.getUrl(urlInput, isAudioOnly);
+                    
+                    if (result && result.url) {
+                        resultDiv.classList.remove('hidden');
+                        downloadBtn.href = result.url;
+                        downloadBtn.textContent = isAudioOnly ? '🎵 Download Audio' : '🎬 Download Video';
+                        loader.style.display = 'none';
+                        hideStatus();
+                        return;
+                    }
+                } catch (error) {
+                    console.warn(`${service.name} failed:`, error.message);
+                }
+            }
+
+            // All failed - provide manual options
+            loader.style.display = 'none';
+            hideStatus();
+            
+            // Fallback: redirect to a web-based downloader
+            const fallbackUrl = `https://cobalt.tools/?url=${encodeURIComponent(urlInput)}`;
+            resultDiv.classList.remove('hidden');
+            downloadBtn.href = fallbackUrl;
+            downloadBtn.textContent = '🌐 Open Cobalt.tools';
+            
+            showError("Direct download failed. Click above to use Cobalt.tools website instead.");
+        }
+
+        function showError(msg) {
+            const el = document.getElementById('errorMsg');
+            el.innerText = msg;
+            el.classList.remove('hidden');
+        }
+    </script>
+</body>
+</html>
